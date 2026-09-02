@@ -1,0 +1,26 @@
+[project]
+name = "webspider"
+version = "0.1.0"
+description = "Polite, research-oriented web + image crawler: static and JS-rendered fetching, site-wide crawling, dedup, robots.txt compliance."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+render = ["playwright>=1.40"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+webspider = "webspider.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["webspider*"]
