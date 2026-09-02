@@ -197,8 +197,10 @@ def map_(url, max_pages, any_domain, out_file, user_agent, respect_robots):
 @click.argument("url")
 @click.option("--out", "out_file", default=None, type=click.Path(), help="Write the extracted record as JSON to this file instead of stdout.")
 @click.option("--render/--no-render", default=False, help="Use headless Chromium (Playwright) for JS-heavy pages.")
+@click.option("--summarize", "do_summarize", is_flag=True, default=False, help="Also turn the extracted content into a summary card via an LLM (needs webspider[ai] + ANTHROPIC_API_KEY).")
+@click.option("--model", default=None, help="Model to use for --summarize (default: webspider.summarize.DEFAULT_MODEL).")
 @_common_fetch_options
-def extract(url, out_file, render, user_agent, cookies_file):
+def extract(url, out_file, render, do_summarize, model, user_agent, cookies_file):
     """Extract text, markdown, metadata, structured data (JSON-LD/microdata/OpenGraph),
     and generic labeled fields (tables, definition lists, bolded labels) from a single
     page — the non-image counterpart to `scrape`. Needs webspider[text]."""
@@ -211,6 +213,98 @@ def extract(url, out_file, render, user_agent, cookies_file):
         raise click.ClickException(f"Fetch failed: HTTP {result.status}")
 
     record = build_content_record(result.text, url)
+    if do_summarize:
+        from .summarize import DEFAULT_MODEL, summarize_record
+        try:
+            record["summary_card"] = summarize_record(record, model=model or DEFAULT_MODEL)
+        except RuntimeError as e:
+            raise click.ClickException(str(e)) from e
+
+    output = json.dumps(record, indent=2)
+    if out_file:
+        Path(out_file).write_text(output)
+        click.echo(f"Written to {out_file}")
+    else:
+        click.echo(output)
+
+
+@main.command()
+@click.argument("content_file", type=click.Path(exists=True))
+@click.option("--out", "out_file", default=None, type=click.Path(), help="Write summary cards (one JSON per line) here instead of stdout.")
+@click.option("--model", default=None, help="Model to use (default: webspider.summarize.DEFAULT_MODEL).")
+@click.option("--limit", default=None, type=int, help="Only summarize the first N records (useful to sanity-check cost/quality before a full run).")
+@click.option("--instructions", default="", help="Extra instructions appended to every summarization prompt.")
+def summarize(content_file, out_file, model, limit, instructions):
+    """Turn each record in a content.jsonl (from `extract`/`crawl --extract`/`batch --extract`)
+    into a clean summary card via an LLM — e.g. for rendering in your own app.
+    Needs webspider[ai] + ANTHROPIC_API_KEY. Cards are explicitly generated content,
+    faithful to the source but never presented as the original page's own text."""
+    from .summarize import DEFAULT_MODEL, summarize_record
+    try:
+        import anthropic
+    except ImportError as e:
+        raise click.ClickException(
+            "Summarization requires the optional dependency. Install with: "
+            "pip install 'webspider[ai]', and set ANTHROPIC_API_KEY."
+        ) from e
+
+    client = anthropic.Anthropic()
+    lines = Path(content_file).read_text(encoding="utf-8").splitlines()
+    if limit:
+        lines = lines[:limit]
+
+    out_lines = []
+    for i, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        try:
+            card = summarize_record(record, model=model or DEFAULT_MODEL, extra_instructions=instructions, client=client)
+        except Exception as e:
+            click.echo(f"[{i}/{len(lines)}] skip {record.get('url')}: {e}")
+            continue
+        out_lines.append(json.dumps(card))
+        click.echo(f"[{i}/{len(lines)}] {card.get('title') or record.get('url')}")
+
+    output = "\n".join(out_lines) + ("\n" if out_lines else "")
+    if out_file:
+        Path(out_file).write_text(output)
+        click.echo(f"Written {len(out_lines)} cards to {out_file}")
+    else:
+        click.echo(output)
+
+
+@main.command()
+@click.argument("url")
+@click.option("--out", "out_file", default=None, type=click.Path(), help="Write the result as JSON to this file instead of stdout.")
+@click.option("--capture-network/--no-capture-network", default=False, help="Also load the page in a headless browser and record its own JSON API calls (needs webspider[render]).")
+@click.option("--user-agent", default=DEFAULT_USER_AGENT)
+def inspect(url, out_file, capture_network, user_agent):
+    """Find images/links present in a page's own code or network traffic that
+    never make it into the rendered DOM: embedded framework hydration state
+    (Next.js __NEXT_DATA__, best-effort Nuxt/generic window.__X__ blobs), and
+    optionally the JSON API responses the page's own JS calls on a normal load.
+    This reads what a real page load already fetches — it does not probe for
+    undocumented endpoints. Use this when discover.py's DOM scan seems to be
+    missing content you know the site has (extra images, extra fields, source
+    links not rendered as clickable <a> tags)."""
+    from .inspect import inspect_page
+
+    result = fetch_static(url, user_agent=user_agent)
+    if result.status != 200 or not result.text:
+        raise click.ClickException(f"Fetch failed: HTTP {result.status}")
+
+    try:
+        record = inspect_page(result.text, url, capture_network=capture_network, user_agent=user_agent)
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Embedded state blocks found: {record['embedded_state_keys'] or 'none'}")
+    if capture_network:
+        click.echo(f"JSON network responses captured: {len(record['network_responses'])}")
+    click.echo(f"Images found beyond the DOM: {len(record['discovered_images'])}")
+    click.echo(f"Links found beyond the DOM: {len(record['discovered_links'])}")
+
     output = json.dumps(record, indent=2)
     if out_file:
         Path(out_file).write_text(output)

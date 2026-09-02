@@ -1,6 +1,6 @@
 ---
 name: webspider
-description: Crawl websites for research — image discovery/download AND text/data extraction. Fast URL mapping (sitemap.xml), single-page scrape/extract, site-wide crawl following internal links, or batch processing a list of URLs. Extraction pulls clean text/Markdown/tables/metadata (trafilatura), embedded structured data (JSON-LD/microdata/OpenGraph via extruct), and generic labeled fields from tables/definition-lists/bolded labels (e.g. a guide page's "Hazards:"/"Wind window:" fields) — the extraction path Claude's own WebFetch doesn't give you as structured, savable JSON. Handles static and JS-rendered pages, concurrent + resumable runs, dedups images by content hash, respects robots.txt (including Crawl-delay) and rate limits. Does NOT bypass CAPTCHAs, Cloudflare/WAF challenges, or paywalls — use for openly accessible pages only.
+description: Crawl websites for research — image discovery/download, text/data extraction, beyond-the-DOM discovery, and optional LLM summary cards. Fast URL mapping (sitemap.xml), single-page scrape/extract/inspect, site-wide crawl following internal links, or batch processing a list of URLs. Extraction pulls clean text/Markdown/tables/metadata (trafilatura), embedded structured data (JSON-LD/microdata/OpenGraph via extruct), and generic labeled fields from tables/definition-lists/bolded labels (e.g. a guide page's "Hazards:"/"Wind window:" fields) — the extraction path Claude's own WebFetch doesn't give you as structured, savable JSON. `inspect` finds images/links/data present in a page's embedded framework state or its own JSON network calls but never rendered into the DOM. `summarize` turns extracted content into a clean, clearly-labeled LLM summary card. Handles static and JS-rendered pages, concurrent + resumable runs, dedups images by content hash, respects robots.txt (including Crawl-delay) and rate limits. Does NOT bypass CAPTCHAs, Cloudflare/WAF challenges, or paywalls, and does not include "AI humanizer" (AI-detector-evasion) functionality — use for openly accessible pages only.
 ---
 
 # WebSpider
@@ -21,6 +21,10 @@ dataset-building purposes on openly accessible pages.
   from every page" — e.g. a directory of site guides where each page lists
   fields like hazards, wind direction, access notes, etc. in a table or
   definition list
+- "Find images/data on this page that aren't showing up in the rendered content"
+  — a modern framework's own embedded state or API calls often carry more
+  than what the DOM renders
+- "Turn this extracted content into a clean summary card for my app"
 
 ## When NOT to use
 
@@ -32,9 +36,10 @@ dataset-building purposes on openly accessible pages.
 ## Usage
 
 Install once: `pip install -e .` from the repo root. Extras: `[render]` for
-JS-heavy pages (`pip install -e '.[render]' && playwright install chromium`),
-`[images]` for dimension filtering, `[text]` for extraction (`pip install -e
-'.[text]'` — needed for every `extract` command/flag below).
+JS-heavy pages and `inspect --capture-network` (`pip install -e '.[render]'
+&& playwright install chromium`), `[images]` for dimension filtering, `[text]`
+for extraction (`pip install -e '.[text]'` — needed for every `extract`
+command/flag below), `[ai]` for `summarize` (needs `ANTHROPIC_API_KEY` too).
 
 ```bash
 # Single page: images
@@ -71,6 +76,14 @@ webspider crawl https://example.com --concurrency 8 --resume
 
 # Scope image discovery to a gallery container only, skip nav/footer icons
 webspider scrape https://example.com/page --selector ".gallery"
+
+# Find data/images/links a DOM-only scan misses (embedded framework state;
+# add --capture-network for the page's own JSON API calls, needs [render])
+webspider inspect https://example.com/page --capture-network --out record.json
+
+# Turn extracted content into a summary card (needs [ai] + ANTHROPIC_API_KEY)
+webspider extract https://example.com/page --summarize --out record.json
+webspider summarize content.jsonl --out cards.jsonl --limit 5
 ```
 
 Every image run writes `manifest.jsonl` to the output directory: one JSON
@@ -91,6 +104,22 @@ style fields, since those virtually never show up in schema.org markup).
 `labeled_fields` keys are whatever the page itself uses, not a fixed schema —
 expect them to vary across sites, or even across pages on the same site if its
 template isn't consistent.
+
+`inspect` writes `embedded_state` (raw parsed framework state blobs, keyed by
+the variable/script-id they came from), `network_responses` (if
+`--capture-network`), and `discovered_images`/`discovered_links` — URLs found
+inside that data, resolved to absolute and deduped against nothing else (diff
+these against a DOM-based `scrape`/`extract` run yourself to see what's
+actually new). This reads what a normal page load already fetches; it is not
+an endpoint scanner and does not probe for undocumented functionality.
+
+`summarize` (and `extract --summarize`) call an LLM per page and cost real
+tokens — use `--limit` to sanity-check quality/cost on a few records before
+running it across a whole `content.jsonl`. The output `key_facts` are
+instructed to reuse the source's own `labeled_fields` rather than reinterpret
+them, and `summary` is instructed never to invent facts not in the source —
+but it's still generated content: present it to the end user as a summary,
+not as the original page's text.
 
 ## Politeness defaults (don't disable without a reason)
 
@@ -126,4 +155,10 @@ template isn't consistent.
   data (extruct: JSON-LD/microdata/OpenGraph), and the hand-rolled
   `extract_labeled_fields()` (definition lists, two-column tables, inline bold
   labels) — the non-schema.org content most guide pages actually use.
-- `webspider/cli.py` — `scrape` / `crawl` / `batch` / `map` / `extract` commands.
+- `webspider/inspect.py` — embedded framework hydration state (Next.js
+  `__NEXT_DATA__`, best-effort Nuxt/generic `window.__X__`), optional
+  Playwright network-response capture, and URL discovery inside that data.
+- `webspider/summarize.py` — turns an `extract` record into an LLM summary card
+  (title/summary/key_facts/tags), instructed to stay faithful to the source.
+- `webspider/cli.py` — `scrape` / `crawl` / `batch` / `map` / `extract` /
+  `inspect` / `summarize` commands.

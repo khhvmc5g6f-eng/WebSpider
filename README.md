@@ -32,6 +32,20 @@ be driven directly from Claude Code.
   extraction across a whole site or URL list, writing one JSON record per page
   to `content.jsonl`. Add `--no-images` to skip image downloading entirely when
   all you want is content.
+- **`webspider inspect <url>`** — finds images/links present in a page's own
+  code or network traffic that never reach the rendered DOM: embedded
+  framework hydration state (Next.js `__NEXT_DATA__`, best-effort Nuxt/generic
+  `window.__X__` blobs), plus — with `--capture-network` (needs `[render]`) —
+  the JSON API responses the page's own JS calls on a normal load. This reads
+  what a real page load already fetches; it does not probe for undocumented
+  endpoints. Use it when `extract`/`scrape` seem to be missing content you
+  know the site has.
+- **`webspider summarize <content.jsonl>`** — turns each extracted record into
+  a clean summary card (title/summary/key_facts/tags) via an LLM, for
+  rendering in your own app (needs `[ai]` + `ANTHROPIC_API_KEY`). Cards are
+  explicitly generated content, instructed never to invent facts beyond the
+  source — see the system prompt in `webspider/summarize.py`. `webspider
+  extract --summarize` does this for a single page in one step.
 
 **Both:**
 - **Batch** process a file of URLs — pages to scrape/extract, or a list of
@@ -59,6 +73,17 @@ than fighting past it — those protections are the site owner's explicit
 "no automated access" signal, and defeating them is out of scope regardless of
 the reason for scraping. Check for an official API or bulk-data export instead.
 
+It also doesn't include "AI humanizer" functionality (rewriting text to evade
+AI-content detectors). `summarize` produces clearly-labeled generated content,
+faithful to its source — not a tool for disguising AI output as human-written,
+and not something to combine with scraped third-party content to launder it as
+original writing.
+
+`inspect`'s embedded-state/network-capture reads only what a page's own normal
+load already fetches — it's a content-discovery tool, not an endpoint-scanning
+one, and it doesn't probe for undocumented functionality the way security
+recon tools (e.g. LinkFinder-style JS-endpoint extractors) do.
+
 ## Install
 
 ```bash
@@ -75,6 +100,9 @@ pip install -e '.[images]'
 
 # optional, for text/data extraction:
 pip install -e '.[text]'
+
+# optional, for LLM summary cards (needs ANTHROPIC_API_KEY too):
+pip install -e '.[ai]'
 ```
 
 ## Usage
@@ -93,6 +121,14 @@ webspider crawl https://example.com --render-auto     # only render pages that l
 webspider extract https://example.com/page --out record.json
 webspider crawl https://example.com --extract --no-images --max-pages 50   # site-wide, content only
 webspider batch urls.txt --extract --no-images                             # from a URL list
+
+# find data/images/links a DOM-only scan misses (needs [render] for --capture-network)
+webspider inspect https://example.com/page --out record.json
+webspider inspect https://example.com/page --capture-network
+
+# LLM summary cards from extracted content (needs [ai] + ANTHROPIC_API_KEY)
+webspider extract https://example.com/page --summarize --out record.json
+webspider summarize content.jsonl --out cards.jsonl --limit 5   # sanity-check before a full run
 ```
 
 Run `webspider <command> --help` for the full option list (delay, user-agent,
@@ -119,6 +155,18 @@ skill) to use it directly from a conversation.
   not a hardcoded field list). RDFa is excluded from `extract_structured_data`
   by default (very noisy on many real sites) — pass `syntaxes=[..., "rdfa"]`
   if you need it.
+- `inspect`'s embedded-state extraction reliably parses Next.js `__NEXT_DATA__`
+  (always plain JSON by framework design) but is best-effort for Nuxt/generic
+  `window.__X__` patterns — older Nuxt serializes state as a JS function call
+  with variable substitution, not pure JSON, and those are skipped rather than
+  mis-parsed. Modern Next.js App Router sites (13+) mostly don't emit
+  `__NEXT_DATA__` at all (they stream React Server Component payloads instead,
+  a different format this doesn't parse) — verified live against nextjs.org,
+  which found nothing, versus github.com's `client-env` JSON block, which
+  parsed correctly.
+- `--capture-network` only sees JSON responses that actually arrive before
+  Playwright's `networkidle` wait completes — a page that lazy-loads data on
+  scroll/interaction won't have that data captured.
 
 ## Roadmap / not yet implemented
 
