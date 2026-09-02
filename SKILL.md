@@ -1,6 +1,6 @@
 ---
 name: webspider
-description: Crawl websites for research — image discovery/download, text/data extraction, beyond-the-DOM discovery, and optional LLM summary cards. Fast URL mapping (sitemap.xml), single-page scrape/extract/inspect, site-wide crawl following internal links, or batch processing a list of URLs. Extraction pulls clean text/Markdown/tables/metadata (trafilatura), embedded structured data (JSON-LD/microdata/OpenGraph via extruct), and generic labeled fields from tables/definition-lists/bolded labels (e.g. a guide page's "Hazards:"/"Wind window:" fields) — the extraction path Claude's own WebFetch doesn't give you as structured, savable JSON. `inspect` finds images/links/data present in a page's embedded framework state or its own JSON network calls but never rendered into the DOM. `summarize` turns extracted content into a clean, clearly-labeled LLM summary card. Handles static and JS-rendered pages, concurrent + resumable runs, dedups images by content hash, respects robots.txt (including Crawl-delay) and rate limits. Does NOT bypass CAPTCHAs, Cloudflare/WAF challenges, or paywalls, and does not include "AI humanizer" (AI-detector-evasion) functionality — use for openly accessible pages only.
+description: Crawl websites for research, extract structured content, create source-faithful summary cards, and revise owned or generated text for natural clarity with deterministic quality and integrity checks. Supports fast URL mapping, single-page or site-wide extraction, image discovery/download, embedded-state inspection, optional LLM summarisation, and editorial profiles with optional voice matching. Respects robots.txt and rate limits; never bypasses access controls or promises AI-detector outcomes.
 ---
 
 # WebSpider
@@ -25,6 +25,8 @@ dataset-building purposes on openly accessible pages.
   — a modern framework's own embedded state or API calls often carry more
   than what the DOM renders
 - "Turn this extracted content into a clean summary card for my app"
+- "Make this generated or owned draft sound clearer and more natural without
+  changing its facts"
 
 ## When NOT to use
 
@@ -39,7 +41,8 @@ Install once: `pip install -e .` from the repo root. Extras: `[render]` for
 JS-heavy pages and `inspect --capture-network` (`pip install -e '.[render]'
 && playwright install chromium`), `[images]` for dimension filtering, `[text]`
 for extraction (`pip install -e '.[text]'` — needed for every `extract`
-command/flag below), `[ai]` for `summarize` (needs `ANTHROPIC_API_KEY` too).
+command/flag below), `[ai]` for `summarize` and `humanize` (needs
+`ANTHROPIC_API_KEY` too).
 
 ```bash
 # Single page: images
@@ -84,6 +87,13 @@ webspider inspect https://example.com/page --capture-network --out record.json
 # Turn extracted content into a summary card (needs [ai] + ANTHROPIC_API_KEY)
 webspider extract https://example.com/page --summarize --out record.json
 webspider summarize content.jsonl --out cards.jsonl --limit 5
+
+# Editorial revision with exact-value/quotation integrity checks
+webspider humanize draft.txt --profile professional --out revised.txt
+webspider humanize draft.txt --voice-sample my-writing.txt --json-output
+
+# Deterministic editorial diagnostics only, without an LLM call
+webspider humanize draft.txt --audit-only
 ```
 
 Every image run writes `manifest.jsonl` to the output directory: one JSON
@@ -120,6 +130,14 @@ instructed to reuse the source's own `labeled_fields` rather than reinterpret
 them, and `summary` is instructed never to invent facts not in the source —
 but it's still generated content: present it to the end user as a summary,
 not as the original page's text.
+
+`humanize` is a source-faithful editorial tool, not an authorship detector. Its
+quality score reports explainable prose signals only. The LLM prompt forbids
+new facts and artificial quirks; a local guard compares repeated numbers,
+dates, measurements, URLs, emails, and quotations and fails closed if any
+change. `--voice-sample` uses cadence, formality, and vocabulary level only,
+not the sample's facts or distinctive phrases. Keep the JSON provenance report
+when traceability matters.
 
 ## Politeness defaults (don't disable without a reason)
 
@@ -160,5 +178,7 @@ not as the original page's text.
   Playwright network-response capture, and URL discovery inside that data.
 - `webspider/summarize.py` — turns an `extract` record into an LLM summary card
   (title/summary/key_facts/tags), instructed to stay faithful to the source.
+- `webspider/humanize.py` — natural-language revision, optional voice matching,
+  deterministic quality diagnostics, and source-integrity comparison.
 - `webspider/cli.py` — `scrape` / `crawl` / `batch` / `map` / `extract` /
-  `inspect` / `summarize` commands.
+  `inspect` / `summarize` / `humanize` commands.

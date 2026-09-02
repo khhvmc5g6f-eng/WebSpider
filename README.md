@@ -46,6 +46,12 @@ be driven directly from Claude Code.
   explicitly generated content, instructed never to invent facts beyond the
   source — see the system prompt in `webspider/summarize.py`. `webspider
   extract --summarize` does this for a single page in one step.
+- **`webspider humanize <file>`** — revises generated or owned text for clearer,
+  more natural prose. It supports plain, professional, editorial, and concise
+  profiles plus an optional voice sample. A deterministic audit explains stock
+  phrasing, rhythm, repeated openings, and long sentences. Exact numbers, dates,
+  measurements, URLs, email addresses, and quotations are source-locked; the
+  command fails rather than releasing a revision when those anchors drift.
 
 **Both:**
 - **Batch** process a file of URLs — pages to scrape/extract, or a list of
@@ -73,11 +79,10 @@ than fighting past it — those protections are the site owner's explicit
 "no automated access" signal, and defeating them is out of scope regardless of
 the reason for scraping. Check for an official API or bulk-data export instead.
 
-It also doesn't include "AI humanizer" functionality (rewriting text to evade
-AI-content detectors). `summarize` produces clearly-labeled generated content,
-faithful to its source — not a tool for disguising AI output as human-written,
-and not something to combine with scraped third-party content to launder it as
-original writing.
+The editorial revision feature does not estimate authorship, promise detector
+outcomes, or disguise provenance. `summarize` and `humanize` produce clearly
+labelled generated or AI-assisted content. Only revise text you own or have the
+right to adapt, and keep the provenance metadata when publishing it.
 
 `inspect`'s embedded-state/network-capture reads only what a page's own normal
 load already fetches — it's a content-discovery tool, not an endpoint-scanning
@@ -129,6 +134,13 @@ webspider inspect https://example.com/page --capture-network
 # LLM summary cards from extracted content (needs [ai] + ANTHROPIC_API_KEY)
 webspider extract https://example.com/page --summarize --out record.json
 webspider summarize content.jsonl --out cards.jsonl --limit 5   # sanity-check before a full run
+
+# source-faithful editorial revision (needs [ai]); use '-' to read stdin
+webspider humanize draft.txt --profile professional --out revised.txt
+webspider humanize draft.txt --voice-sample my-writing.txt --json-output --out revision.json
+
+# deterministic diagnostics only: no API key or LLM call
+webspider humanize draft.txt --audit-only
 ```
 
 Run `webspider <command> --help` for the full option list (delay, user-agent,
