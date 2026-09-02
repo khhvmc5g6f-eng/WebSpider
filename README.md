@@ -2,37 +2,53 @@
 
 [![CI](https://github.com/khhvmc5g6f-eng/WebSpider/actions/workflows/ci.yml/badge.svg)](https://github.com/khhvmc5g6f-eng/WebSpider/actions/workflows/ci.yml)
 
-A polite, research-oriented web/image crawler — combining the useful parts of
-several single-purpose scrapers into one tool, plus a [Claude Code skill](SKILL.md)
-wrapper so it can be driven directly from Claude Code.
+A polite, research-oriented web crawler — image discovery/download **and**
+text/data extraction, combining the useful parts of several single-purpose
+scrapers into one tool, plus a [Claude Code skill](SKILL.md) wrapper so it can
+be driven directly from Claude Code.
 
 ## What it does
 
+**Images:**
 - **Scrape** a single page for images (`<img src>`, `data-src`, `srcset`,
   `<picture><source>`, `og:image`, CSS `background-image`).
 - **Crawl** a site — BFS over internal links, collecting images from every page
   it visits, capped by `--max-pages` / `--max-depth`.
-- **Batch** process a file of URLs — either pages to scrape, or a list of direct
-  image URLs to download.
+- **Dedup** downloads by content SHA-1 hash, and log every attempt (saved /
+  duplicate / skipped / error) — plus alt text and dimensions — to a
+  `manifest.jsonl`.
+- Optional **dimension filtering** (`--min-width`/`--min-height`, needs the
+  `[images]` extra) to skip icons/tracking pixels.
+
+**Text & data** (the non-image counterpart — needs the `[text]` extra):
+- **`webspider extract <url>`** — clean article text, Markdown (tables included),
+  page metadata (author/date/sitename/language), embedded structured data
+  (schema.org JSON-LD, microdata, OpenGraph), and generic **labeled fields**
+  pulled from tables/definition-lists/bolded labels — this last one is what
+  catches guide-style content like "Hazards: ..." or "Wind window: ..." that
+  structured-data formats don't expose at all, since it works off the page's
+  own labels rather than a fixed schema.
+- `webspider crawl --extract` / `webspider batch --extract` run the same
+  extraction across a whole site or URL list, writing one JSON record per page
+  to `content.jsonl`. Add `--no-images` to skip image downloading entirely when
+  all you want is content.
+
+**Both:**
+- **Batch** process a file of URLs — pages to scrape/extract, or a list of
+  direct image URLs to download.
 - Handle **JS-rendered pages** via optional headless Chromium (Playwright), with
   an `--render-auto` heuristic that retries with rendering only when a static
   fetch looks like an empty SPA shell.
 - **Map** a site fast (`webspider map`) — sitemap.xml/robots.txt discovery with a
   link-crawl fallback, no downloads, to scope a crawl before running it.
-- **Dedup** downloads by content SHA-1 hash, and log every attempt (saved /
-  duplicate / skipped / error) — plus alt text and dimensions — to a
-  `manifest.jsonl`.
 - **Concurrent downloads** (`--concurrency`) and **resumable runs** (`--resume`)
   that skip already-processed pages/images from a prior run.
-- Scope discovery to a **CSS selector** (`--selector`) to ignore site chrome, and
-  pull images out of **schema.org JSON-LD** (`ImageObject`) as well as HTML.
+- Scope image discovery to a **CSS selector** (`--selector`) to ignore site chrome.
 - **Respect `robots.txt`** — both disallow rules and the site's requested
   `Crawl-delay` — and rate-limit requests by default.
 - Optional **cookie-file support** (`--cookies-file`) so WebSpider can act as the
   user's own already-logged-in session — not a bypass, only for accounts the
   user already has access to.
-- Optional **dimension filtering** (`--min-width`/`--min-height`, needs the
-  `[images]` extra) to skip icons/tracking pixels.
 
 ## What it deliberately does *not* do
 
@@ -56,6 +72,9 @@ playwright install chromium
 
 # optional, for dimension filtering:
 pip install -e '.[images]'
+
+# optional, for text/data extraction:
+pip install -e '.[text]'
 ```
 
 ## Usage
@@ -69,6 +88,11 @@ webspider batch urls.txt --out ./out                 # urls.txt = pages to scrap
 webspider batch urls.txt --out ./out --raw-images     # urls.txt = direct image URLs
 webspider crawl https://example.com --render          # JS-heavy site
 webspider crawl https://example.com --render-auto     # only render pages that look JS-dependent
+
+# text/data extraction (needs [text])
+webspider extract https://example.com/page --out record.json
+webspider crawl https://example.com --extract --no-images --max-pages 50   # site-wide, content only
+webspider batch urls.txt --extract --no-images                             # from a URL list
 ```
 
 Run `webspider <command> --help` for the full option list (delay, user-agent,
@@ -89,6 +113,12 @@ skill) to use it directly from a conversation.
   thousands of pages will accumulate a correspondingly large state file.
 - JSON-LD wrapped in an HTML comment (`<script type="application/ld+json"><!--{...}--></script>`,
   an old browser-compat pattern) isn't parsed.
+- `extract_labeled_fields` is a heuristic, not a schema — it finds whatever
+  labels a page happens to use, so field *names* will vary page to page (a
+  guide site's own template consistency is what makes this useful in practice,
+  not a hardcoded field list). RDFa is excluded from `extract_structured_data`
+  by default (very noisy on many real sites) — pass `syntaxes=[..., "rdfa"]`
+  if you need it.
 
 ## Roadmap / not yet implemented
 

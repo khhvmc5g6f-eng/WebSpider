@@ -1,7 +1,7 @@
 [project]
 name = "webspider"
-version = "0.2.0"
-description = "Polite, research-oriented web + image crawler: static/JS-rendered fetching, site-wide crawling, sitemap-based URL mapping, concurrent+resumable downloads, content dedup, robots.txt compliance."
+version = "0.3.0"
+description = "Polite, research-oriented web crawler: image discovery/dedup AND text/data extraction (clean text, markdown, tables, JSON-LD/microdata/OpenGraph, generic label-value fields), static/JS-rendered fetching, site-wide crawling, sitemap-based URL mapping, concurrent+resumable runs, robots.txt compliance."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -14,6 +14,7 @@ dependencies = [
 [project.optional-dependencies]
 render = ["playwright>=1.40"]
 images = ["Pillow>=10.0"]
+text = ["trafilatura>=1.8", "extruct>=0.16"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

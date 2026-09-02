@@ -25,8 +25,12 @@ def crawl(
     scope_selector: str | None = None,
     cookies_file: str | None = None,
     resume: bool = False,
+    download_images: bool = True,
+    extract_content: bool = False,
 ) -> dict:
     fetch = fetch_rendered if render else fetch_static
+    content_path = downloader.out_dir / "content.jsonl" if extract_content else None
+    pages_extracted = 0
     visited: set[str] = set()
     state_path = downloader.out_dir / ".crawl_state.json"
     queue: deque[tuple[str, int]] = deque([(start_url, 0)])
@@ -80,8 +84,17 @@ def crawl(
             continue
 
         pages_crawled += 1
-        image_candidates = find_image_urls(result.text, url, scope_selector=scope_selector)
-        all_records.extend(downloader.download_many(url, image_candidates))
+
+        if download_images:
+            image_candidates = find_image_urls(result.text, url, scope_selector=scope_selector)
+            all_records.extend(downloader.download_many(url, image_candidates))
+
+        if extract_content:
+            from .extract import build_content_record  # lazy: optional dependency
+            record = build_content_record(result.text, url)
+            with content_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+            pages_extracted += 1
 
         if depth < max_depth:
             for link in find_internal_links(result.text, url, same_domain=same_domain):
@@ -96,4 +109,6 @@ def crawl(
         "pages_crawled": pages_crawled,
         "skipped_robots": skipped_robots,
         "records": all_records,
+        "pages_extracted": pages_extracted,
+        "content_path": str(content_path) if content_path else None,
     }

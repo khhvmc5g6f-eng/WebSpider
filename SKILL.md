@@ -1,19 +1,26 @@
 ---
 name: webspider
-description: Crawl websites and download images for research — fast URL mapping (sitemap.xml), single-page scrape, site-wide crawl following internal links, or batch processing a list of URLs. Handles static and JS-rendered pages, concurrent + resumable downloads, dedups by content hash, extracts alt text and schema.org JSON-LD image metadata, respects robots.txt (including Crawl-delay) and rate limits. Does NOT bypass CAPTCHAs, Cloudflare/WAF challenges, or paywalls — use for openly accessible pages only.
+description: Crawl websites for research — image discovery/download AND text/data extraction. Fast URL mapping (sitemap.xml), single-page scrape/extract, site-wide crawl following internal links, or batch processing a list of URLs. Extraction pulls clean text/Markdown/tables/metadata (trafilatura), embedded structured data (JSON-LD/microdata/OpenGraph via extruct), and generic labeled fields from tables/definition-lists/bolded labels (e.g. a guide page's "Hazards:"/"Wind window:" fields) — the extraction path Claude's own WebFetch doesn't give you as structured, savable JSON. Handles static and JS-rendered pages, concurrent + resumable runs, dedups images by content hash, respects robots.txt (including Crawl-delay) and rate limits. Does NOT bypass CAPTCHAs, Cloudflare/WAF challenges, or paywalls — use for openly accessible pages only.
 ---
 
 # WebSpider
 
-A polite, research-oriented web/image crawler. Use this skill when the user wants to
-pull images or crawl a site for research/dataset-building purposes on openly
-accessible pages.
+A polite, research-oriented web crawler — image discovery/download AND text/data
+extraction. Use this skill when the user wants to pull images, or pull
+structured content (article text, tables, metadata, guide-style labeled
+fields), from one page, a whole site, or a list of URLs, for research/
+dataset-building purposes on openly accessible pages.
 
 ## When to use
 
 - "Download all the images from this page/site"
 - "Crawl this site and collect its images for a dataset"
 - "Batch-download images from this list of URLs"
+- "Extract the [text/tables/metadata/hazards/specs/...] from this page"
+- "Crawl this site and pull out [guide content / article text / structured data]
+  from every page" — e.g. a directory of site guides where each page lists
+  fields like hazards, wind direction, access notes, etc. in a table or
+  definition list
 
 ## When NOT to use
 
@@ -24,18 +31,30 @@ accessible pages.
 
 ## Usage
 
-Install once: `pip install -e .` from the repo root (add `[render]` for JS pages:
-`pip install -e '.[render]' && playwright install chromium`).
+Install once: `pip install -e .` from the repo root. Extras: `[render]` for
+JS-heavy pages (`pip install -e '.[render]' && playwright install chromium`),
+`[images]` for dimension filtering, `[text]` for extraction (`pip install -e
+'.[text]'` — needed for every `extract` command/flag below).
 
 ```bash
-# Single page
+# Single page: images
 webspider scrape https://example.com/gallery --out ./out
 
-# Site-wide crawl (follows internal links, same domain by default)
+# Single page: text/tables/metadata/structured-data/labeled-fields (needs [text])
+webspider extract https://example.com/site-guide/some-site --out record.json
+
+# Site-wide crawl: images (follows internal links, same domain by default)
 webspider crawl https://example.com --out ./out --max-pages 50 --max-depth 3
 
-# Batch: file of page URLs (one per line) -> scrape each
+# Site-wide crawl: content only, no images — the shape most content-extraction
+# tasks want (e.g. a directory of guide pages, each with its own fields)
+webspider crawl https://example.com --extract --no-images --max-pages 100 --out ./out
+
+# Batch: file of page URLs (one per line) -> scrape each for images
 webspider batch urls.txt --out ./out
+
+# Batch: file of page URLs -> extract content from each, no images
+webspider batch urls.txt --extract --no-images --out ./out
 
 # Batch: file of direct image URLs -> download each
 webspider batch urls.txt --out ./out --raw-images
@@ -43,22 +62,35 @@ webspider batch urls.txt --out ./out --raw-images
 # JS-heavy site: render with headless Chromium instead of static HTML
 webspider crawl https://example.com --render
 
-# Fast recon before a big crawl: just list URLs (sitemap.xml, or a link-crawl fallback)
+# Fast recon before a big crawl/extract run: just list URLs (sitemap.xml, or a
+# link-crawl fallback) — this is the "map" half of the map->extract workflow
 webspider map https://example.com --out urls.txt
 
 # Faster: 8 concurrent download workers, resumable if interrupted
 webspider crawl https://example.com --concurrency 8 --resume
 
-# Scope discovery to a gallery container only, skip nav/footer icons
+# Scope image discovery to a gallery container only, skip nav/footer icons
 webspider scrape https://example.com/page --selector ".gallery"
 ```
 
-Every run writes `manifest.jsonl` to the output directory: one JSON record per
-image with its source page, URL, local path, sha1, alt text, dimensions (if
-`[images]` extra installed), and status (`saved`/`duplicate`/`skipped`/`error`).
-Duplicate images (by content hash) are detected and not re-saved within a run.
-`--resume` makes a `crawl` skip pages/images already recorded from a prior run
-in the same `--out` directory.
+Every image run writes `manifest.jsonl` to the output directory: one JSON
+record per image with its source page, URL, local path, sha1, alt text,
+dimensions (if `[images]` extra installed), and status
+(`saved`/`duplicate`/`skipped`/`error`). Duplicate images (by content hash) are
+detected and not re-saved within a run. `--resume` makes a `crawl`/`batch`/
+`scrape` skip images already recorded from a prior run in the same `--out`
+directory.
+
+Every `--extract` run writes `content.jsonl` to the output directory: one JSON
+record per page — `url`, `title`, `text`, `markdown` (tables included as
+Markdown pipe-tables), `metadata` (author/date/sitename/hostname/language),
+`structured_data` (JSON-LD/microdata/OpenGraph), and `labeled_fields` (a flat
+`{label: value}` dict pulled from that page's own tables/definition-lists/
+bolded labels — the part that catches a site guide's "Hazards"/"Wind window"
+style fields, since those virtually never show up in schema.org markup).
+`labeled_fields` keys are whatever the page itself uses, not a fixed schema —
+expect them to vary across sites, or even across pages on the same site if its
+template isn't consistent.
 
 ## Politeness defaults (don't disable without a reason)
 
@@ -90,4 +122,8 @@ in the same `--out` directory.
 - `webspider/robots.py` — robots.txt disallow + crawl-delay, cached per domain.
 - `webspider/sitemap.py` — fast URL discovery via robots.txt `Sitemap:` +
   sitemap.xml (incl. sitemap indexes), with a link-crawl fallback. Powers `map`.
-- `webspider/cli.py` — `scrape` / `crawl` / `batch` / `map` commands.
+- `webspider/extract.py` — text/Markdown/metadata (trafilatura), structured
+  data (extruct: JSON-LD/microdata/OpenGraph), and the hand-rolled
+  `extract_labeled_fields()` (definition lists, two-column tables, inline bold
+  labels) — the non-schema.org content most guide pages actually use.
+- `webspider/cli.py` — `scrape` / `crawl` / `batch` / `map` / `extract` commands.
