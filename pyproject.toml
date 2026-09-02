@@ -1,7 +1,7 @@
 [project]
 name = "webspider"
-version = "0.1.0"
-description = "Polite, research-oriented web + image crawler: static and JS-rendered fetching, site-wide crawling, dedup, robots.txt compliance."
+version = "0.2.0"
+description = "Polite, research-oriented web + image crawler: static/JS-rendered fetching, site-wide crawling, sitemap-based URL mapping, concurrent+resumable downloads, content dedup, robots.txt compliance."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 render = ["playwright>=1.40"]
+images = ["Pillow>=10.0"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

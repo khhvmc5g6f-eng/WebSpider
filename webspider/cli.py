@@ -1,4 +1,4 @@
-"""WebSpider CLI: scrape, crawl, and batch-download images politely."""
+"""WebSpider CLI: scrape, crawl, map, and batch-download images politely."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +9,7 @@ from .crawl import crawl as run_crawl
 from .discover import find_image_urls
 from .download import Downloader
 from .fetch import DEFAULT_USER_AGENT, fetch_rendered, fetch_static
+from .sitemap import discover_urls
 
 
 def _summarize(records) -> None:
@@ -17,6 +18,22 @@ def _summarize(records) -> None:
     skipped = sum(1 for r in records if r.status == "skipped")
     errors = sum(1 for r in records if r.status == "error")
     click.echo(f"saved={saved} duplicate={dup} skipped={skipped} error={errors}")
+
+
+def _common_fetch_options(f):
+    f = click.option("--user-agent", default=DEFAULT_USER_AGENT)(f)
+    f = click.option("--cookies-file", default=None, help="Netscape-format cookies.txt for your OWN logged-in session (not a bypass — same as opening the page in your browser).")(f)
+    return f
+
+
+def _common_download_options(f):
+    f = click.option("--delay", default=0.5, help="Seconds to wait between downloads (per worker).")(f)
+    f = click.option("--concurrency", default=1, help="Parallel download workers.")(f)
+    f = click.option("--min-width", default=None, type=int, help="Skip images narrower than this (requires Pillow: pip install webspider[images]).")(f)
+    f = click.option("--min-height", default=None, type=int, help="Skip images shorter than this (requires Pillow).")(f)
+    f = click.option("--selector", default=None, help="CSS selector to scope image discovery to (e.g. '.gallery').")(f)
+    f = click.option("--resume", is_flag=True, default=False, help="Skip images already recorded in --out's manifest from a previous run.")(f)
+    return f
 
 
 @click.group()
@@ -29,18 +46,21 @@ def main():
 @click.argument("url")
 @click.option("--out", "out_dir", default="./webspider_out", help="Output directory.")
 @click.option("--render/--no-render", default=False, help="Use headless Chromium (Playwright) for JS-heavy pages.")
-@click.option("--user-agent", default=DEFAULT_USER_AGENT)
-@click.option("--delay", default=0.5, help="Seconds to wait between downloads.")
-def scrape(url: str, out_dir: str, render: bool, user_agent: str, delay: float):
+@_common_fetch_options
+@_common_download_options
+def scrape(url, out_dir, render, user_agent, cookies_file, delay, concurrency, min_width, min_height, selector, resume):
     """Scrape all images from a single page."""
     fetch = fetch_rendered if render else fetch_static
-    result = fetch(url, user_agent=user_agent)
+    result = fetch(url, user_agent=user_agent, cookies_file=cookies_file)
     if result.status != 200 or not result.text:
         raise click.ClickException(f"Fetch failed: HTTP {result.status}")
-    image_urls = find_image_urls(result.text, url)
-    click.echo(f"Found {len(image_urls)} candidate images on {url}")
-    downloader = Downloader(Path(out_dir), user_agent=user_agent, delay=delay)
-    records = downloader.download_many(url, image_urls)
+    candidates = find_image_urls(result.text, url, scope_selector=selector)
+    click.echo(f"Found {len(candidates)} candidate images on {url}")
+    downloader = Downloader(
+        Path(out_dir), user_agent=user_agent, delay=delay, concurrency=concurrency,
+        cookies_file=cookies_file, min_width=min_width, min_height=min_height, resume=resume,
+    )
+    records = downloader.download_many(url, candidates)
     _summarize(records)
     click.echo(f"Manifest: {downloader.manifest_path}")
 
@@ -52,32 +72,23 @@ def scrape(url: str, out_dir: str, render: bool, user_agent: str, delay: float):
 @click.option("--max-depth", default=2, help="Max link-following depth from the start URL.")
 @click.option("--same-domain/--any-domain", default=True, help="Restrict crawl to the start URL's domain.")
 @click.option("--render/--no-render", default=False, help="Use headless Chromium for JS-heavy pages.")
-@click.option("--user-agent", default=DEFAULT_USER_AGENT)
-@click.option("--delay", default=0.5, help="Seconds to wait between requests.")
+@click.option("--render-auto", is_flag=True, default=False, help="Auto-retry with rendering when a static fetch looks JS-dependent (empty SPA shell, noscript warning).")
 @click.option("--respect-robots/--ignore-robots", default=True)
+@_common_fetch_options
+@_common_download_options
 def crawl(
-    url: str,
-    out_dir: str,
-    max_pages: int,
-    max_depth: int,
-    same_domain: bool,
-    render: bool,
-    user_agent: str,
-    delay: float,
-    respect_robots: bool,
+    url, out_dir, max_pages, max_depth, same_domain, render, render_auto, respect_robots,
+    user_agent, cookies_file, delay, concurrency, min_width, min_height, selector, resume,
 ):
     """Crawl a site (following internal links) and download images from every page visited."""
-    downloader = Downloader(Path(out_dir), user_agent=user_agent, delay=delay)
+    downloader = Downloader(
+        Path(out_dir), user_agent=user_agent, delay=delay, concurrency=concurrency,
+        cookies_file=cookies_file, min_width=min_width, min_height=min_height, resume=resume,
+    )
     result = run_crawl(
-        url,
-        downloader,
-        max_pages=max_pages,
-        max_depth=max_depth,
-        same_domain=same_domain,
-        render=render,
-        delay=delay,
-        user_agent=user_agent,
-        respect_robots=respect_robots,
+        url, downloader, max_pages=max_pages, max_depth=max_depth, same_domain=same_domain,
+        render=render, render_auto=render_auto, delay=delay, user_agent=user_agent,
+        respect_robots=respect_robots, scope_selector=selector, cookies_file=cookies_file, resume=resume,
     )
     click.echo(f"Pages crawled: {result['pages_crawled']}")
     if result["skipped_robots"]:
@@ -91,31 +102,57 @@ def crawl(
 @click.option("--out", "out_dir", default="./webspider_out", help="Output directory.")
 @click.option("--raw-images/--pages", default=False, help="Treat each line as a direct image URL instead of a page to scrape.")
 @click.option("--render/--no-render", default=False)
-@click.option("--user-agent", default=DEFAULT_USER_AGENT)
-@click.option("--delay", default=0.5)
-def batch(url_file: str, out_dir: str, raw_images: bool, render: bool, user_agent: str, delay: float):
+@_common_fetch_options
+@_common_download_options
+def batch(url_file, out_dir, raw_images, render, user_agent, cookies_file, delay, concurrency, min_width, min_height, selector, resume):
     """Process a text file of URLs (one per line): pages to scrape, or direct image URLs."""
     urls = [line.strip() for line in Path(url_file).read_text().splitlines() if line.strip()]
-    downloader = Downloader(Path(out_dir), user_agent=user_agent, delay=delay)
+    downloader = Downloader(
+        Path(out_dir), user_agent=user_agent, delay=delay, concurrency=concurrency,
+        cookies_file=cookies_file, min_width=min_width, min_height=min_height, resume=resume,
+    )
     all_records = []
 
     if raw_images:
-        all_records = downloader.download_many(url_file, urls)
+        from .discover import ImageCandidate
+        all_records = downloader.download_many(url_file, [ImageCandidate(url=u) for u in urls])
     else:
         fetch = fetch_rendered if render else fetch_static
         for page_url in urls:
             try:
-                result = fetch(page_url, user_agent=user_agent)
+                result = fetch(page_url, user_agent=user_agent, cookies_file=cookies_file)
             except Exception as e:
                 click.echo(f"skip {page_url}: {e}")
                 continue
             if result.status != 200 or not result.text:
                 continue
-            image_urls = find_image_urls(result.text, page_url)
-            all_records.extend(downloader.download_many(page_url, image_urls))
+            candidates = find_image_urls(result.text, page_url, scope_selector=selector)
+            all_records.extend(downloader.download_many(page_url, candidates))
 
     _summarize(all_records)
     click.echo(f"Manifest: {downloader.manifest_path}")
+
+
+@main.command(name="map")
+@click.argument("url")
+@click.option("--max-pages", default=200, help="Cap on URLs returned.")
+@click.option("--any-domain", is_flag=True, default=False, help="Allow discovered URLs outside the start URL's domain (link-crawl fallback only).")
+@click.option("--out", "out_file", default=None, type=click.Path(), help="Write discovered URLs (one per line) to this file instead of stdout.")
+@click.option("--user-agent", default=DEFAULT_USER_AGENT)
+@click.option("--respect-robots/--ignore-robots", default=True)
+def map_(url, max_pages, any_domain, out_file, user_agent, respect_robots):
+    """Discover URLs on a site fast (sitemap.xml, or a link-crawl fallback) — no downloads.
+    Use this to scope a site before running a full `crawl`."""
+    result = discover_urls(
+        url, max_pages=max_pages, same_domain=not any_domain, user_agent=user_agent, respect_robots=respect_robots
+    )
+    click.echo(f"Source: {result['source']} — {len(result['urls'])} URLs")
+    if out_file:
+        Path(out_file).write_text("\n".join(result["urls"]) + "\n")
+        click.echo(f"Written to {out_file}")
+    else:
+        for u in result["urls"]:
+            click.echo(u)
 
 
 if __name__ == "__main__":
