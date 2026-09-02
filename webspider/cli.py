@@ -275,6 +275,45 @@ def summarize(content_file, out_file, model, limit, instructions):
 
 
 @main.command()
+@click.argument("source", type=click.File("r", encoding="utf-8"))
+@click.option("--out", "out_file", default=None, type=click.Path(), help="Write the revised text or JSON report to this file.")
+@click.option("--profile", type=click.Choice(["plain", "professional", "editorial", "concise"]), default="plain", show_default=True)
+@click.option("--voice-sample", type=click.Path(exists=True, dir_okay=False), default=None, help="Optional writing sample used only for cadence, formality, and vocabulary level.")
+@click.option("--model", default=None, help="Model to use (default: webspider.humanize.DEFAULT_MODEL).")
+@click.option("--audit-only", is_flag=True, help="Run deterministic writing diagnostics without calling an LLM.")
+@click.option("--json-output", is_flag=True, help="Emit the full audit, integrity, and provenance report as JSON.")
+def humanize(source, out_file, profile, voice_sample, model, audit_only, json_output):
+    """Improve a text file's clarity and natural rhythm without changing facts.
+
+    SOURCE may be '-' for stdin. The command preserves exact numbers, dates,
+    measurements, URLs, emails, and quotations, and fails closed if they drift.
+    It is an editorial tool, not an AI detector or detector-evasion feature.
+    """
+    from .humanize import DEFAULT_MODEL, HumanizationIntegrityError, audit_text, humanize_text
+
+    source_text = source.read()
+    if not source_text.strip():
+        raise click.ClickException("Source text is empty.")
+
+    if audit_only:
+        result = audit_text(source_text)
+        output = json.dumps(result, indent=2)
+    else:
+        sample = Path(voice_sample).read_text(encoding="utf-8") if voice_sample else ""
+        try:
+            result = humanize_text(source_text, profile=profile, voice_sample=sample, model=model or DEFAULT_MODEL)
+        except (RuntimeError, ValueError, HumanizationIntegrityError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        output = json.dumps(result, indent=2) if json_output else result["text"]
+
+    if out_file:
+        Path(out_file).write_text(output + ("" if output.endswith("\n") else "\n"), encoding="utf-8")
+        click.echo(f"Written to {out_file}")
+    else:
+        click.echo(output)
+
+
+@main.command()
 @click.argument("url")
 @click.option("--out", "out_file", default=None, type=click.Path(), help="Write the result as JSON to this file instead of stdout.")
 @click.option("--capture-network/--no-capture-network", default=False, help="Also load the page in a headless browser and record its own JSON API calls (needs webspider[render]).")
